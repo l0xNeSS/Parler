@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Diagnose Windows Build
 
 on:
   workflow_dispatch:
@@ -20,14 +20,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Show runner info
-        shell: pwsh
-        run: |
-          node -v
-          npm -v
-          python --version
-          git --version
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
@@ -42,35 +34,55 @@ jobs:
           version: 1.4.309.0
           cache: true
 
-      - name: Show tool versions
+      - name: Show environment info
         shell: pwsh
         run: |
+          node -v
           bun --version
           rustc -V
           cargo -V
 
       - name: Install frontend dependencies
-        run: bun install
-
-      - name: Build with Tauri (NSIS only)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --target x86_64-pc-windows-msvc --bundles nsis
-
-      - name: Show built files
         shell: pwsh
         run: |
-          Write-Host "Bundle contents:"
-          Get-ChildItem -Recurse "src-tauri/target/x86_64-pc-windows-msvc/release/bundle" |
-            Select-Object FullName, Length
+          bun install
 
-      - name: Upload artifacts
+      - name: Tauri info
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path logs | Out-Null
+          bun tauri info 2>&1 | Tee-Object -FilePath logs\tauri-info.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build with Tauri directly (verbose)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path logs | Out-Null
+          bun tauri build --target x86_64-pc-windows-msvc --bundles nsis -v 2>&1 | Tee-Object -FilePath logs\tauri-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Show bundle files
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "Searching built files..."
+          Get-ChildItem -Recurse src-tauri\target -Include *.exe,*.msi | Select-Object FullName, Length
+
+      - name: Upload logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: parler-windows-nsis
+          name: parler-build-logs
+          path: logs\*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload exe artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parler-windows-exe
           path: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-          if-no-files-found: error
+            src-tauri/target/**/bundle/nsis/*.exe
+          if-no-files-found: warn
           retention-days: 30
